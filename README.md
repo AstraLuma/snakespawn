@@ -10,3 +10,5 @@ Lets you put your pip and python requirements into your script.
 
 print("Really cool stuff should happen here")
 ```
+
+Currently targetting 3.7 and greater.
