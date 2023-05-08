@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import itertools
 import os
 import re
+import pathlib
 import subprocess
 import sys
+import tempfile
 import typing
 
 
@@ -53,15 +55,25 @@ def safe_scan(path):
         return ()
 
 
+def look_for_pythons(root):
+    """
+    Runs a glob, yields potential python binaries.
+    """
+    for item in itertools.chain(
+        pathlib.Path(root).glob('python*'),
+        (pathlib.Path(root) / 'bin').glob('python*'),
+    ):
+        if PYTHONISH.fullmatch(item.name) and item.is_file():
+            yield item
+
+
 def iter_pythons_path():
     """
     Finds all the pythons on $PATH
     """
     dirs = os.environ.get('PATH', os.defpath).split(os.pathsep)
     for pathdir in dirs:
-        for entry in safe_scan(pathdir):
-            if entry.is_file() and PYTHONISH.fullmatch(entry.name):
-                yield entry.path
+        yield from look_for_pythons(pathdir)
 
 
 def iter_pythons_pyenv():
@@ -75,11 +87,8 @@ def iter_pythons_pyenv():
         entry.path
         for entry in safe_scan(pyenv_home)
         if entry.is_dir()
-        if os.path.exists(os.path.join(entry.path, 'bin'))
     ]:
-        for entry in os.scandir(os.path.join(install, 'bin')):
-            if entry.is_file() and PYTHONISH.fullmatch(entry.name):
-                yield entry.path
+        yield from look_for_pythons(install)
 
 
 def iter_pythons_manylinux():
@@ -90,16 +99,15 @@ def iter_pythons_manylinux():
         entry.path
         for entry in safe_scan('/opt/python')
         if entry.is_dir()
-        if os.path.exists(os.path.join(entry.path, 'bin'))
     ]:
-        for entry in safe_scan(os.path.join(install, 'bin')):
-            if entry.is_file() and PYTHONISH.fullmatch(entry.name):
-                yield entry.path
+        yield from look_for_pythons(install)
 
 
 def python_version(path):
     """
-    Asks the python binary at the path for its version
+    Asks the python binary at the path for its version.
+
+    Returns None on any error or if the output was unrecognized.
     """
     try:
         proc = subprocess.run(
@@ -120,6 +128,10 @@ def python_version(path):
 
 
 def resolve_python(version):
+    """
+    Scours the system for python installations and finds the ones that match
+    the given version requirement.
+    """
     potentials = itertools.chain(
         iter_pythons_path(),
         iter_pythons_manylinux(),
@@ -127,13 +139,33 @@ def resolve_python(version):
         # TODO: Where else to look?
     )
     # TODO: Resolve symlinks and dedup
-    pythons = [
+    pythons = list(filter(lambda i: bool(i[1]), (
         (path, python_version(path))
         for path in potentials
-    ]
-    print(pythons)
-    # FIXME: Perform comparison against the passed-in version
-    yield from ()
+    )))
+    # FIXME: Perform actual parsing & comparisons following PEP440
+    # This is a minimal, half-assesed version of what I would like this to do
+    if version:
+        if not re.match(r'\d+(\.\d+)*', version):
+            sys.exit(
+                f"Currently only supports Python version spec of x.y.z (given {version!r})\n"
+                "FIXME: Support full PEP440"
+            )
+        looking_for_version = [int(bit) for bit in version.split('.')]
+        for pypath, pyver in pythons:
+            if not pyver:
+                continue
+            pyver = [int(bit) for bit in pyver.split('.')]
+            if pyver >= looking_for_version:
+                yield pypath
+    else:
+        pythons = sorted(
+            pythons,
+            key=(lambda pv:
+                 [int(bit) for bit in pv[1].split('.')] if pv[1] else []),
+            reverse=True,
+        )
+        yield from (p for p, _ in pythons)
 
 
 @ dataclass
@@ -143,6 +175,9 @@ class Args:
 
 
 def parse_args():
+    """
+    Parse CLI args
+    """
     # FIXME: Handle --help, --version, other stuff
     # Any parameters after the filename must be handled as scriptargs
     if len(sys.argv) < 2:
@@ -152,6 +187,20 @@ def parse_args():
         filename=sys.argv[1],
         scriptargs=sys.argv[2:],
     )
+
+
+def get_venv(python, deps):
+    """
+    Returns the venv-ified Python binary to use.
+
+    Either creates a venv or reuses a previously-existing one.
+    """
+    # FIXME: Use re-discoverable directory names
+    # h = hashlib.shake_128('\n'.join(sorted(reqs)).encode('utf-8'))
+    venvpath = tempfile.mkdtemp(prefix='snakespawn')
+    subprocess.run([python, '-m', 'venv', venvpath], check=True)
+    # FIXME: Handle Windows
+    return f"{venvpath}/bin/python"
 
 
 def main():
@@ -166,8 +215,10 @@ def main():
         sys.exit(f"Could not find a Python matching {info.python}")
 
     # Build Venv
+    python = get_venv(python, info.deps)
 
     # Exec
+    os.execv(python, [python, args.filename] + args.scriptargs)
 
 
 if __name__ == '__main__':
