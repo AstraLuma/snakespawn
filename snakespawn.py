@@ -199,8 +199,16 @@ def get_venv(python, deps):
     # h = hashlib.shake_128('\n'.join(sorted(reqs)).encode('utf-8'))
     venvpath = tempfile.mkdtemp(prefix='snakespawn')
     subprocess.run([python, '-m', 'venv', venvpath], check=True)
-    # FIXME: Handle Windows
-    return f"{venvpath}/bin/python"
+    # FIXME: Handle windows
+    binpath = f"{venvpath}/bin"
+    with tempfile.NamedTemporaryFile('w+t') as reqfile:
+        for dep in deps:
+            print(dep, file=reqfile)
+        reqfile.flush()
+        reqfile.seek(0)
+        subprocess.run([f"{binpath}/pip", "install", "-r", reqfile.name])
+
+    return f"{binpath}/python"
 
 
 def main():
