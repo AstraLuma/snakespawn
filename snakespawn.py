@@ -168,7 +168,7 @@ def resolve_python(version):
         yield from (p for p, _ in pythons)
 
 
-@ dataclass
+@dataclass
 class Args:
     filename: str
     scriptargs: typing.List[str]
@@ -206,7 +206,13 @@ def get_venv(python, deps):
             print(dep, file=reqfile)
         reqfile.flush()
         reqfile.seek(0)
-        subprocess.run([f"{binpath}/pip", "install", "-r", reqfile.name])
+        subprocess.run(
+            [f"{binpath}/pip", "install", "-r", reqfile.name],
+            check=True,
+            stdout=sys.stderr,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
 
     return f"{binpath}/python"
 
